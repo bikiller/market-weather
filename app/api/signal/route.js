@@ -1,89 +1,179 @@
 ﻿import { NextResponse } from 'next/server';
 
-export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const symbol = searchParams.get('symbol') || 'AAPL';
-  const apiKey = 'VLHOY9XP08I8Z3HM';  // 替换你的key
+// 计算EMA
+function calculateEMA(prices, period) {
+  if (prices.length < period) return prices[prices.length - 1];
+  
+  const k = 2 / (period + 1);
+  let ema = prices[0];
+  
+  for (let i = 1; i < prices.length; i++) {
+    ema = prices[i] * k + ema * (1 - k);
+  }
+  
+  return ema;
+}
 
-  try {
-    let url;
-    let isCrypto = symbol.includes('USD') || symbol.includes('USDT') || symbol.includes('BTC') || symbol.includes('ETH');  // 检测加密
-    if (isCrypto) {
-      // 加密专用API
-      const cryptoSymbol = symbol.replace(/USD|USDT/i, '');  // e.g., BTCUSD -> BTC
-      url = `https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_INTRADAY&symbol=${cryptoSymbol}&market=USD&interval=5min&apikey=${apiKey}`;
-    } else {
-      // 股票/外汇
-      url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=5min&apikey=${apiKey}`;
-    }
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`API response error: ${response.status} - ${response.statusText}`);
-    }
-    const data = await response.json();
-
-    let timeSeries;
-    if (isCrypto) {
-      timeSeries = data['Time Series Crypto (5min)'];
-    } else {
-      timeSeries = data['Time Series (5min)'];
-    }
-
-    if (!timeSeries) {
-      throw new Error('No time series data - check symbol or API key. For crypto, use BTCUSD format.');
-    }
-
-    // 取最新5根K线计算
-    const timestamps = Object.keys(timeSeries).slice(0, 5).reverse();  // 最新在前
-    const closes = timestamps.map(ts => parseFloat(timeSeries[ts]['4. close'] || timeSeries[ts]['4. close']));
-    const highs = timestamps.map(ts => parseFloat(timeSeries[ts]['2. high']));
-    const lows = timestamps.map(ts => parseFloat(timeSeries[ts]['3. low']));
-    const opens = timestamps.map(ts => parseFloat(timeSeries[ts]['1. open']));
-
-    const current_close = closes[0];
-    const current_open = opens[0];
-    const recent_high = Math.max(...highs.slice(0, 4));
-    const recent_low = Math.min(...lows.slice(0, 4));
-
-    // EMA计算 (EWMA)
-    function ewm(series, span) {
-      const alpha = 2 / (span + 1);
-      let ema = series[0];
-      for (let i = 1; i < series.length; i++) {
-        ema = alpha * series[i] + (1 - alpha) * ema;
+// 获取K线数据 - 使用多个备用源
+async function getKlineData(symbol, interval, limit = 200) {
+  // 备用API列表
+  const apiUrls = [
+    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://api2.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    `https://api3.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+  ];
+  
+  for (const url of apiUrls) {
+    try {
+      const response = await fetch(url, { 
+        signal: AbortSignal.timeout(8000)
+      });
+      
+      if (!response.ok) continue;
+      
+      const data = await response.json();
+      
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map(k => ({
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          time: k[0]
+        }));
       }
-      return ema;
+    } catch (error) {
+      console.log(`尝试 ${url} 失败，切换下一个...`);
+      continue;
     }
-    const ema5 = ewm(closes, 5);
-    const ema15 = ewm(closes, 15);
-    const ema60 = ewm(closes, 60);
+  }
+  
+  throw new Error('所有数据源均不可用');
+}
 
-    let signals = [];
-    // 1. K线高低对比
-    if (current_close > recent_high * 0.99) signals.push(1);
-    else if (current_close < recent_low * 1.01) signals.push(-1);
-    else signals.push(0);
-    // 2. 开盘对比
-    signals.push(current_close > current_open ? 1 : -1);
-    // 3. EMA位置
-    let ema_above_count = 0;
-    if (current_close > ema5) ema_above_count++;
-    if (current_close > ema15) ema_above_count++;
-    if (current_close > ema60) ema_above_count++;
-    signals.push((ema_above_count / 3) * 2 - 1);
+// 计算信号
+function calculateSignal(kline5m, kline15m, kline60m) {
+  const prices5m = kline5m.map(k => k.close);
+  const prices15m = kline15m.map(k => k.close);
+  const prices60m = kline60m.map(k => k.close);
+  
+  const ema5m_125 = calculateEMA(prices5m, 125);
+  const ema15m_125 = calculateEMA(prices15m, 125);
+  const ema60m_125 = calculateEMA(prices60m, 125);
+  
+  const currentPrice = kline5m[kline5m.length - 1].close;
+  const openPrice = kline5m[kline5m.length - 1].open;
+  const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
+  
+  let signal = 'NEUTRAL';
+  let confidence = 0;
+  let reasons = [];
+  
+  const above5m = currentPrice > ema5m_125;
+  const above15m = currentPrice > ema15m_125;
+  const above60m = currentPrice > ema60m_125;
+  
+  if (above5m && above15m && above60m) {
+    signal = 'LONG';
+    confidence = 70;
+    reasons.push('价格位于 5分钟、15分钟、60分钟 EMA125 均线之上');
+    
+    if (priceChange > 0) {
+      confidence += 15;
+      reasons.push(`当前K线上涨 ${priceChange.toFixed(2)}%`);
+    }
+    
+    if (ema5m_125 > ema15m_125 && ema15m_125 > ema60m_125) {
+      confidence += 15;
+      reasons.push('EMA125 呈多头排列');
+    }
+  } else if (!above5m && !above15m && !above60m) {
+    signal = 'SHORT';
+    confidence = 70;
+    reasons.push('价格位于 5分钟、15分钟、60分钟 EMA125 均线之下');
+    
+    if (priceChange < 0) {
+      confidence += 15;
+      reasons.push(`当前K线下跌 ${Math.abs(priceChange).toFixed(2)}%`);
+    }
+    
+    if (ema5m_125 < ema15m_125 && ema15m_125 < ema60m_125) {
+      confidence += 15;
+      reasons.push('EMA125 呈空头排列');
+    }
+  } else {
+    signal = 'NEUTRAL';
+    confidence = 50;
+    
+    const positions = [];
+    if (above5m) positions.push('5分钟上方');
+    else positions.push('5分钟下方');
+    
+    if (above15m) positions.push('15分钟上方');
+    else positions.push('15分钟下方');
+    
+    if (above60m) positions.push('60分钟上方');
+    else positions.push('60分钟下方');
+    
+    reasons.push(`价格分别在 EMA125 的：${positions.join('、')}`);
+    reasons.push('多空信号不明确，建议观望');
+  }
+  
+  return {
+    signal,
+    confidence: Math.min(confidence, 100),
+    reasons,
+    data: {
+      currentPrice: currentPrice.toFixed(2),
+      priceChange: (priceChange >= 0 ? '+' : '') + priceChange.toFixed(2) + '%',
+      ema5m: ema5m_125.toFixed(2),
+      ema15m: ema15m_125.toFixed(2),
+      ema60m: ema60m_125.toFixed(2)
+    }
+  };
+}
 
-    const score = signals.reduce((a, b) => a + b, 0) / signals.length;
-    const direction = score > 0.5 ? '多头' : score < -0.5 ? '空头' : '中性';
-
-    return NextResponse.json({ 
-      direction, 
-      score: score.toFixed(2), 
-      current_price: current_close.toFixed(2),
-      open: current_open.toFixed(2)
+export async function GET(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const symbol = searchParams.get('symbol');
+    const market = searchParams.get('market');
+    
+    if (!symbol) {
+      return NextResponse.json({ error: '请输入交易对' }, { status: 400 });
+    }
+    
+    if (market !== 'crypto') {
+      return NextResponse.json({ 
+        error: '暂时只支持数字货币，外汇功能即将上线' 
+      }, { status: 400 });
+    }
+    
+    console.log(`正在获取 ${symbol} 的数据...`);
+    
+    const [kline5m, kline15m, kline60m] = await Promise.all([
+      getKlineData(symbol, '5m', 200),
+      getKlineData(symbol, '15m', 200),
+      getKlineData(symbol, '1h', 200)
+    ]);
+    
+    console.log('数据获取成功！');
+    
+    const result = calculateSignal(kline5m, kline15m, kline60m);
+    
+    return NextResponse.json({
+      success: true,
+      symbol,
+      timestamp: new Date().toISOString(),
+      ...result
     });
+    
   } catch (error) {
     console.error('API Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ 
+      error: '获取数据失败：' + error.message 
+    }, { status: 500 });
   }
 }
