@@ -1,89 +1,127 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+
+function calculateEMA(prices, period) {
+  if (prices.length < period) return prices[prices.length - 1];
+  const k = 2 / (period + 1);
+  let ema = prices[0];
+  for (let i = 1; i < prices.length; i++) {
+    ema = prices[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+async function getKlineData(symbol, interval, limit) {
+  const urls = [
+    'https://data-api.binance.vision/api/v3/klines',
+    'https://api.binance.us/api/v3/klines',
+    'https://api1.binance.com/api/v3/klines'
+  ];
+  
+  for (const baseUrl of urls) {
+    try {
+      const url = `${baseUrl}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map(k => ({
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4])
+        }));
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+  throw new Error('No data');
+}
+
+function calculateSignal(k5, k15, k60) {
+  const p5 = k5.map(x => x.close);
+  const p15 = k15.map(x => x.close);
+  const p60 = k60.map(x => x.close);
+  
+  const e5 = calculateEMA(p5, 125);
+  const e15 = calculateEMA(p15, 125);
+  const e60 = calculateEMA(p60, 125);
+  
+  const cur = k5[k5.length - 1].close;
+  const opn = k5[k5.length - 1].open;
+  const chg = ((cur - opn) / opn) * 100;
+  
+  let sig = 'NEUTRAL';
+  let conf = 50;
+  let rea = [];
+  
+  const a5 = cur > e5;
+  const a15 = cur > e15;
+  const a60 = cur > e60;
+  
+  if (a5 && a15 && a60) {
+    sig = 'LONG';
+    conf = 70;
+    rea.push('Above all EMA125');
+    if (chg > 0) {
+      conf += 15;
+      rea.push('Up ' + chg.toFixed(2) + '%');
+    }
+  } else if (!a5 && !a15 && !a60) {
+    sig = 'SHORT';
+    conf = 70;
+    rea.push('Below all EMA125');
+    if (chg < 0) {
+      conf += 15;
+      rea.push('Down ' + Math.abs(chg).toFixed(2) + '%');
+    }
+  } else {
+    rea.push('Mixed signals');
+  }
+  
+  return {
+    signal: sig,
+    confidence: conf,
+    reasons: rea,
+    data: {
+      currentPrice: cur.toFixed(2),
+      priceChange: (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%',
+      ema5m: e5.toFixed(2),
+      ema15m: e15.toFixed(2),
+      ema60m: e60.toFixed(2)
+    }
+  };
+}
 
 export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const symbol = searchParams.get('symbol') || 'AAPL';
-  const apiKey = 'VLHOY9XP08I8Z3HM';  // 替换你的key
-
   try {
-    let url;
-    let isCrypto = symbol.includes('USD') || symbol.includes('USDT') || symbol.includes('BTC') || symbol.includes('ETH');  // 检测加密
-    if (isCrypto) {
-      // 加密专用API
-      const cryptoSymbol = symbol.replace(/USD|USDT/i, '');  // e.g., BTCUSD -> BTC
-      url = `https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_INTRADAY&symbol=${cryptoSymbol}&market=USD&interval=5min&apikey=${apiKey}`;
-    } else {
-      // 股票/外汇
-      url = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=5min&apikey=${apiKey}`;
+    const url = new URL(request.url);
+    const symbol = url.searchParams.get('symbol');
+    const market = url.searchParams.get('market');
+    
+    if (!symbol) {
+      return NextResponse.json({ error: 'No symbol' }, { status: 400 });
     }
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`API response error: ${response.status} - ${response.statusText}`);
+    
+    if (market !== 'crypto') {
+      return NextResponse.json({ error: 'Crypto only' }, { status: 400 });
     }
-    const data = await response.json();
-
-    let timeSeries;
-    if (isCrypto) {
-      timeSeries = data['Time Series Crypto (5min)'];
-    } else {
-      timeSeries = data['Time Series (5min)'];
-    }
-
-    if (!timeSeries) {
-      throw new Error('No time series data - check symbol or API key. For crypto, use BTCUSD format.');
-    }
-
-    // 取最新5根K线计算
-    const timestamps = Object.keys(timeSeries).slice(0, 5).reverse();  // 最新在前
-    const closes = timestamps.map(ts => parseFloat(timeSeries[ts]['4. close'] || timeSeries[ts]['4. close']));
-    const highs = timestamps.map(ts => parseFloat(timeSeries[ts]['2. high']));
-    const lows = timestamps.map(ts => parseFloat(timeSeries[ts]['3. low']));
-    const opens = timestamps.map(ts => parseFloat(timeSeries[ts]['1. open']));
-
-    const current_close = closes[0];
-    const current_open = opens[0];
-    const recent_high = Math.max(...highs.slice(0, 4));
-    const recent_low = Math.min(...lows.slice(0, 4));
-
-    // EMA计算 (EWMA)
-    function ewm(series, span) {
-      const alpha = 2 / (span + 1);
-      let ema = series[0];
-      for (let i = 1; i < series.length; i++) {
-        ema = alpha * series[i] + (1 - alpha) * ema;
-      }
-      return ema;
-    }
-    const ema5 = ewm(closes, 5);
-    const ema15 = ewm(closes, 15);
-    const ema60 = ewm(closes, 60);
-
-    let signals = [];
-    // 1. K线高低对比
-    if (current_close > recent_high * 0.99) signals.push(1);
-    else if (current_close < recent_low * 1.01) signals.push(-1);
-    else signals.push(0);
-    // 2. 开盘对比
-    signals.push(current_close > current_open ? 1 : -1);
-    // 3. EMA位置
-    let ema_above_count = 0;
-    if (current_close > ema5) ema_above_count++;
-    if (current_close > ema15) ema_above_count++;
-    if (current_close > ema60) ema_above_count++;
-    signals.push((ema_above_count / 3) * 2 - 1);
-
-    const score = signals.reduce((a, b) => a + b, 0) / signals.length;
-    const direction = score > 0.5 ? '多头' : score < -0.5 ? '空头' : '中性';
-
-    return NextResponse.json({ 
-      direction, 
-      score: score.toFixed(2), 
-      current_price: current_close.toFixed(2),
-      open: current_open.toFixed(2)
+    
+    const k5 = await getKlineData(symbol, '5m', 200);
+    const k15 = await getKlineData(symbol, '15m', 200);
+    const k60 = await getKlineData(symbol, '1h', 200);
+    
+    const result = calculateSignal(k5, k15, k60);
+    
+    return NextResponse.json({
+      success: true,
+      symbol,
+      ...result
     });
+    
   } catch (error) {
-    console.error('API Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ 
+      error: error.message 
+    }, { status: 500 });
   }
 }
