@@ -1,64 +1,82 @@
-'use client';
+'use client'
 import { useState } from 'react';
 
 export default function Home() {
   const [symbol, setSymbol] = useState('');
-  const [result, setResult] = useState(null);
+  const [signal, setSignal] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const queryDirection = async () => {
+  const handleQuery = async () => {
     if (!symbol.trim()) {
-      alert('请输入品种代码！');
+      alert('请输入交易对');
       return;
     }
+    
     setLoading(true);
+    setSignal(null);
+    
     try {
-      const res = await fetch(`/api/signal?symbol=${encodeURIComponent(symbol)}`);
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
+      // 直接构建 URL，不使用任何额外参数
+      const cleanSymbol = symbol.trim().toUpperCase();
+      const url = `/api/signal?symbol=${cleanSymbol}&market=crypto`;
+      
+      console.log('发送请求:', url);
+      
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      console.log('收到响应:', data);
+      
+      if (!response.ok) {
+        alert(data.error || '请求失败');
+        setLoading(false);
+        return;
       }
-      const data = await res.json();
-      setResult(data);
+      
+      if (data.error) {
+        alert(data.error);
+        setLoading(false);
+        return;
+      }
+      
+      setSignal(data);
     } catch (error) {
-      setResult({ error: error.message });
+      console.error('错误:', error);
+      alert('获取数据失败: ' + error.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24 bg-gray-50">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">市场晴雨表 - 多空方向指示器</h1>
-      <div className="w-80 space-y-4">
-        <input
-          type="text"
-          placeholder="输入品种 (e.g., AAPL, BTC-USD, EURUSD=X)"
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value.toUpperCase())}  // 自动大写
-          className="w-full border border-gray-300 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={loading}
-        />
-        <button 
-          onClick={queryDirection} 
-          disabled={loading || !symbol.trim()}
-          className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold disabled:bg-gray-400 hover:bg-blue-600 transition-colors"
-        >
-          {loading ? '查询中...' : '查询方向'}
-        </button>
-        {result && (
-          <div className={`p-4 rounded-lg ${result.error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-            {result.error ? (
-              <p className="text-center">错误: {result.error}</p>
-            ) : (
-              <div className="text-center space-y-2">
-                <p className="text-xl font-bold">方向: {result.direction}</p>
-                <p>分数: {result.score}</p>
-                <p>当前价: ${result.current_price}</p>
-              </div>
-            )}
-          </div>
-        )}
-        <p className="text-sm text-gray-500 text-center">支持股票、外汇、加密、期货 (e.g., AAPL, BTC-USD)</p>
-      </div>
-    </main>
-  );
-}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+      <div className="max-w-2xl mx-auto">
+        <h1 className="text-4xl font-bold text-center mb-2 text-indigo-900">
+          市场晴雨表 🌤️
+        </h1>
+        <p className="text-center text-gray-600 mb-8">
+          数字货币多空方向指示器（EMA125）
+        </p>
+        
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            输入交易对
+          </label>
+          <input
+            type="text"
+            placeholder="例如: BTCUSDT, ETHUSDT, BNBUSDT"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
+            className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          />
+          
+          <button
+            onClick={handleQuery}
+            disabled={loading || !symbol}
+            className="w-full bg-indigo-600 text-white p-3 rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
+          >
+            {loading ? '⏳ 分析中...' : '🔍 查询方向'}
+          </button>
+          
+          <div className="mt-3 text-sm text-gray-500
