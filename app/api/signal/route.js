@@ -10,15 +10,16 @@ function calculateEMA(prices, period) {
   return ema;
 }
 
-async function getKlineData(symbol, interval, limit = 200) {
-  const apiUrls = [
-    `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-    `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-    `https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+async function getKlineData(symbol, interval, limit) {
+  const urls = [
+    'https://data-api.binance.vision/api/v3/klines',
+    'https://api.binance.us/api/v3/klines',
+    'https://api1.binance.com/api/v3/klines'
   ];
   
-  for (const url of apiUrls) {
+  for (const baseUrl of urls) {
     try {
+      const url = `${baseUrl}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
       const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!response.ok) continue;
       const data = await response.json();
@@ -27,115 +28,100 @@ async function getKlineData(symbol, interval, limit = 200) {
           open: parseFloat(k[1]),
           high: parseFloat(k[2]),
           low: parseFloat(k[3]),
-          close: parseFloat(k[4]),
-          time: k[0]
+          close: parseFloat(k[4])
         }));
       }
-    } catch (error) {
+    } catch (e) {
       continue;
     }
   }
-  throw new Error('Unable to fetch data');
+  throw new Error('No data');
 }
 
-function calculateSignal(kline5m, kline15m, kline60m) {
-  const prices5m = kline5m.map(k => k.close);
-  const prices15m = kline15m.map(k => k.close);
-  const prices60m = kline60m.map(k => k.close);
+function calculateSignal(k5, k15, k60) {
+  const p5 = k5.map(x => x.close);
+  const p15 = k15.map(x => x.close);
+  const p60 = k60.map(x => x.close);
   
-  const ema5m_125 = calculateEMA(prices5m, 125);
-  const ema15m_125 = calculateEMA(prices15m, 125);
-  const ema60m_125 = calculateEMA(prices60m, 125);
+  const e5 = calculateEMA(p5, 125);
+  const e15 = calculateEMA(p15, 125);
+  const e60 = calculateEMA(p60, 125);
   
-  const currentPrice = kline5m[kline5m.length - 1].close;
-  const openPrice = kline5m[kline5m.length - 1].open;
-  const priceChange = ((currentPrice - openPrice) / openPrice) * 100;
+  const cur = k5[k5.length - 1].close;
+  const opn = k5[k5.length - 1].open;
+  const chg = ((cur - opn) / opn) * 100;
   
-  let signal = 'NEUTRAL';
-  let confidence = 0;
-  let reasons = [];
+  let sig = 'NEUTRAL';
+  let conf = 50;
+  let rea = [];
   
-  const above5m = currentPrice > ema5m_125;
-  const above15m = currentPrice > ema15m_125;
-  const above60m = currentPrice > ema60m_125;
+  const a5 = cur > e5;
+  const a15 = cur > e15;
+  const a60 = cur > e60;
   
-  if (above5m && above15m && above60m) {
-    signal = 'LONG';
-    confidence = 70;
-    reasons.push('Price above all EMA125 periods');
-    if (priceChange > 0) {
-      confidence += 15;
-      reasons.push(`Current candle up ${priceChange.toFixed(2)}%`);
+  if (a5 && a15 && a60) {
+    sig = 'LONG';
+    conf = 70;
+    rea.push('Above all EMA125');
+    if (chg > 0) {
+      conf += 15;
+      rea.push('Up ' + chg.toFixed(2) + '%');
     }
-    if (ema5m_125 > ema15m_125 && ema15m_125 > ema60m_125) {
-      confidence += 15;
-      reasons.push('EMA125 bullish alignment');
-    }
-  } else if (!above5m && !above15m && !above60m) {
-    signal = 'SHORT';
-    confidence = 70;
-    reasons.push('Price below all EMA125 periods');
-    if (priceChange < 0) {
-      confidence += 15;
-      reasons.push(`Current candle down ${Math.abs(priceChange).toFixed(2)}%`);
-    }
-    if (ema5m_125 < ema15m_125 && ema15m_125 < ema60m_125) {
-      confidence += 15;
-      reasons.push('EMA125 bearish alignment');
+  } else if (!a5 && !a15 && !a60) {
+    sig = 'SHORT';
+    conf = 70;
+    rea.push('Below all EMA125');
+    if (chg < 0) {
+      conf += 15;
+      rea.push('Down ' + Math.abs(chg).toFixed(2) + '%');
     }
   } else {
-    signal = 'NEUTRAL';
-    confidence = 50;
-    reasons.push('Price between EMA125 levels');
-    reasons.push('Suggest wait and see');
+    rea.push('Mixed signals');
   }
   
   return {
-    signal,
-    confidence: Math.min(confidence, 100),
-    reasons,
+    signal: sig,
+    confidence: conf,
+    reasons: rea,
     data: {
-      currentPrice: currentPrice.toFixed(2),
-      priceChange: (priceChange >= 0 ? '+' : '') + priceChange.toFixed(2) + '%',
-      ema5m: ema5m_125.toFixed(2),
-      ema15m: ema15m_125.toFixed(2),
-      ema60m: ema60m_125.toFixed(2)
+      currentPrice: cur.toFixed(2),
+      priceChange: (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%',
+      ema5m: e5.toFixed(2),
+      ema15m: e15.toFixed(2),
+      ema60m: e60.toFixed(2)
     }
   };
 }
 
 export async function GET(request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const market = searchParams.get('market');
+    const url = new URL(request.url);
+    const symbol = url.searchParams.get('symbol');
+    const market = url.searchParams.get('market');
     
     if (!symbol) {
-      return NextResponse.json({ error: 'Please enter trading pair' }, { status: 400 });
+      return NextResponse.json({ error: 'No symbol' }, { status: 400 });
     }
     
     if (market !== 'crypto') {
-      return NextResponse.json({ error: 'Only crypto supported now' }, { status: 400 });
+      return NextResponse.json({ error: 'Crypto only' }, { status: 400 });
     }
     
-    const [kline5m, kline15m, kline60m] = await Promise.all([
-      getKlineData(symbol, '5m', 200),
-      getKlineData(symbol, '15m', 200),
-      getKlineData(symbol, '1h', 200)
-    ]);
+    const k5 = await getKlineData(symbol, '5m', 200);
+    const k15 = await getKlineData(symbol, '15m', 200);
+    const k60 = await getKlineData(symbol, '1h', 200);
     
-    const result = calculateSignal(kline5m, kline15m, kline60m);
+    const result = calculateSignal(k5, k15, k60);
     
     return NextResponse.json({
       success: true,
       symbol,
-      timestamp: new Date().toISOString(),
       ...result
     });
     
   } catch (error) {
     return NextResponse.json({ 
-      error: 'Failed to fetch data: ' + error.message 
+      error: error.message 
     }, { status: 500 });
   }
 }
