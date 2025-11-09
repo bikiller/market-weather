@@ -19,18 +19,21 @@ export default function Home() {
       const cleanSymbol = symbol.trim().toUpperCase();
       const url = `/api/signal?symbol=${cleanSymbol}&market=crypto`;
       
+      console.log('Requesting:', url);
+      
       const response = await fetch(url);
       const data = await response.json();
       
-      if (!response.ok || data.error) {
-        alert(data.error || '请求失败');
-        setLoading(false);
-        return;
-      }
+      console.log('Response:', data);
       
-      setSignal(data);
+      if (data.error) {
+        alert(data.error);
+      } else {
+        setSignal(data);
+      }
     } catch (error) {
-      alert('获取数据失败');
+      console.error(error);
+      alert('请求失败');
     } finally {
       setLoading(false);
     }
