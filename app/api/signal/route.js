@@ -1,4 +1,5 @@
-﻿'use client'
+﻿PS C:\Users\Administrator\Desktop\market-weather> cat app/api/signal/route.js
+'use client'
 import { useState } from 'react';
 
 export default function Home() {
@@ -12,31 +13,31 @@ export default function Home() {
       alert('请输入交易对');
       return;
     }
-    
+
     setLoading(true);
     setSignal(null);
-    
+
     try {
       const url = `/api/signal?symbol=${encodeURIComponent(symbol.toUpperCase())}&market=${market}`;
       console.log('请求URL:', url);
-      
+
       const response = await fetch(url);
       const data = await response.json();
-      
+
       console.log('返回数据:', data);
-      
+
       if (!response.ok || data.error) {
         alert(data.error || '获取数据失败');
         setLoading(false);
         return;
       }
-      
+
       setSignal(data);
     } catch (error) {
       console.error('请求错误:', error);
       alert('获取数据失败，请重试');
     }
-    
+
     setLoading(false);
   };
 
@@ -49,7 +50,7 @@ export default function Home() {
         <p className="text-center text-gray-600 mb-8">
           数字货币方向指示器（基于 EMA125）
         </p>
-        
+
         {/* 输入区域 */}
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -63,7 +64,7 @@ export default function Home() {
             className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             onKeyPress={(e) => e.key === 'Enter' && handleQuery()}
           />
-          
+
           <button
             onClick={handleQuery}
             disabled={loading || !symbol}
@@ -71,7 +72,7 @@ export default function Home() {
           >
             {loading ? '⏳ 分析中...' : '🔍 获取信号'}
           </button>
-          
+
           <div className="mt-4 text-sm text-gray-500">
             <p>💡 提示：输入格式如 BTCUSDT、ETHUSDT、BNBUSDT</p>
           </div>
@@ -81,15 +82,15 @@ export default function Home() {
         {signal && (
           <div className="bg-white rounded-lg shadow-lg p-6">
             <div className={`text-center p-8 rounded-lg mb-6 ${
-              signal.signal === 'LONG' ? 'bg-green-100 border-2 border-green-300' : 
-              signal.signal === 'SHORT' ? 'bg-red-100 border-2 border-red-300' : 
+              signal.signal === 'LONG' ? 'bg-green-100 border-2 border-green-300' :
+              signal.signal === 'SHORT' ? 'bg-red-100 border-2 border-red-300' :
               'bg-gray-100 border-2 border-gray-300'
             }`}>
               <div className="text-6xl mb-4">
                 {signal.signal === 'LONG' ? '📈' : signal.signal === 'SHORT' ? '📉' : '➡️'}
               </div>
               <h2 className="text-3xl font-bold mb-2">
-                {signal.signal === 'LONG' ? '🟢 做多信号' : 
+                {signal.signal === 'LONG' ? '🟢 做多信号' :
                  signal.signal === 'SHORT' ? '🔴 做空信号' : '⚪ 中性观望'}
               </h2>
               <div className="text-xl font-semibold mt-2">
@@ -118,8 +119,8 @@ export default function Home() {
                   <div className="bg-gray-50 p-3 rounded">
                     <div className="text-gray-500">涨跌幅</div>
                     <div className={`font-bold text-lg ${
-                      signal.data.priceChange?.startsWith('+') ? 'text-green-600' : 
-                      signal.data.priceChange?.startsWith('-') ? 'text-red-600' : 
+                      signal.data.priceChange?.startsWith('+') ? 'text-green-600' :
+                      signal.data.priceChange?.startsWith('-') ? 'text-red-600' :
                       'text-gray-600'
                     }`}>
                       {signal.data.priceChange}
